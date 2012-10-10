@@ -23,6 +23,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
+import copy
 
 from multiprocessing import Pool
 import os
@@ -38,31 +39,6 @@ ATTACK_SCRIPT = os.path.join(os.path.dirname(__file__), 'attack.py')
 
 # Utilities
 
-def _read_server_list():
-    instance_ids = []
-
-    if not os.path.isfile(STATE_FILENAME):
-        return (None, None, None)
-
-    with open(STATE_FILENAME, 'r') as f:
-        username = f.readline().strip()
-        key_name = f.readline().strip()
-        text = f.read()
-        instance_ids = text.split('\n')
-
-        print 'Read %i bees from the roster.' % len(instance_ids)
-
-    return (username, key_name, instance_ids)
-
-def _write_server_list(username, key_name, instances):
-    with open(STATE_FILENAME, 'w') as f:
-        f.write('%s\n' % username)
-        f.write('%s\n' % key_name)
-        f.write('\n'.join([instance.id for instance in instances]))
-
-def _delete_server_list():
-    os.remove(STATE_FILENAME)
-
 def _get_pem_path(key):
     return os.path.expanduser('~/.ssh/%s.pem' % key)
 
@@ -72,19 +48,13 @@ def up(count, group, zone, image_id, username, key_name):
     """
     Startup the load testing server.
     """
-    existing_username, existing_key_name, instance_ids = _read_server_list()
-
-    if instance_ids:
-        print 'Bees are already assembled and awaiting orders.'
-        return
-
     count = int(count)
 
     pem_path = _get_pem_path(key_name)
 
     if not os.path.isfile(pem_path):
         print 'No key file found at %s' % pem_path
-        return
+        return False
 
     print 'Connecting to the hive.'
 
@@ -118,38 +88,18 @@ def up(count, group, zone, image_id, username, key_name):
 
     ec2_connection.create_tags(instance_ids, { "Name": "a bee!" })
 
-    _write_server_list(username, key_name, reservation.instances)
-
     print 'The swarm has assembled %i bees.' % len(reservation.instances)
 
-def report():
-    """
-    Report the status of the load testing servers.
-    """
-    username, key_name, instance_ids = _read_server_list()
+    return {
+        'username': str(username),
+        'key-name': str(key_name),
+        'instances': [str(instance.id) for instance in reservation.instances],
+    }
 
-    if not instance_ids:
-        print 'No bees have been mobilized.'
-        return
-
-    ec2_connection = boto.connect_ec2()
-
-    reservations = ec2_connection.get_all_instances(instance_ids=instance_ids)
-
-    instances = []
-
-    for reservation in reservations:
-        instances.extend(reservation.instances)
-
-    for instance in instances:
-        print 'Bee %s: %s @ %s' % (instance.id, instance.state, instance.ip_address)
-
-def down():
+def down(username, key_name, instance_ids):
     """
     Shutdown the load testing server.
     """
-    username, key_name, instance_ids = _read_server_list()
-
     if not instance_ids:
         print 'No bees have been mobilized.'
         return
@@ -165,8 +115,6 @@ def down():
 
     print 'Stood down %i bees.' % len(terminated_instance_ids)
 
-    _delete_server_list()
-
 def _attack(params):
     """
     Test the target URL with requests.
@@ -174,7 +122,6 @@ def _attack(params):
     Intended for use with multiprocessing.
     """
     print 'Bee %i is joining the swarm.' % params['i']
-
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -191,7 +138,7 @@ def _attack(params):
 
         print 'Bee %i is firing his machine gun. Bang bang!' % params['i']
 
-        stdin, stdout, stderr = client.exec_command('python attack.py')
+        stdin, stdout, stderr = client.exec_command('python attack.py %(users)s %(ssl-ratio)s %(messages)s %(min-pause)s %(max-pause)s %(min-length)s %(max-length)s %(target-host)s %(target-port)s %(target-ssl-port)s %(target-channel)s %(password)s' % params['battleplan'])
 
         result = stdout.read()
         print result
@@ -202,68 +149,14 @@ def _attack(params):
 
         return None
     except socket.error, e:
+        print "SOMETHING FAILED!"
+        import traceback; traceback.print_exc()
         return e
 
-
-def _print_results(results):
-    """
-    Print summarized load-testing results.
-    """
-    timeout_bees = [r for r in results if r is None]
-    exception_bees = [r for r in results if type(r) == socket.error]
-    complete_bees = [r for r in results if r is not None and type(r) != socket.error]
-
-    num_timeout_bees = len(timeout_bees)
-    num_exception_bees = len(exception_bees)
-    num_complete_bees = len(complete_bees)
-
-    if exception_bees:
-        print '     %i of your bees didn\'t make it to the action. They might be taking a little longer than normal to find their machine guns, or may have been terminated without using "bees down".' % num_exception_bees
-
-    if timeout_bees:
-        print '     Target timed out without fully responding to %i bees.' % num_timeout_bees
-
-    if num_complete_bees == 0:
-        print '     No bees completed the mission. Apparently your bees are peace-loving hippies.'
-        return
-
-    complete_results = [r['complete_requests'] for r in complete_bees]
-    total_complete_requests = sum(complete_results)
-    print '     Complete requests:\t\t%i' % total_complete_requests
-
-    complete_results = [r['requests_per_second'] for r in complete_bees]
-    mean_requests = sum(complete_results)
-    print '     Requests per second:\t%f [#/sec] (mean)' % mean_requests
-
-    complete_results = [r['ms_per_request'] for r in complete_bees]
-    mean_response = sum(complete_results) / num_complete_bees
-    print '     Time per request:\t\t%f [ms] (mean)' % mean_response
-
-    complete_results = [r['fifty_percent'] for r in complete_bees]
-    mean_fifty = sum(complete_results) / num_complete_bees
-    print '     50%% response time:\t\t%f [ms] (mean)' % mean_fifty
-
-    complete_results = [r['ninety_percent'] for r in complete_bees]
-    mean_ninety = sum(complete_results) / num_complete_bees
-    print '     90%% response time:\t\t%f [ms] (mean)' % mean_ninety
-
-    if mean_response < 500:
-        print 'Mission Assessment: Target crushed bee offensive.'
-    elif mean_response < 1000:
-        print 'Mission Assessment: Target successfully fended off the swarm.'
-    elif mean_response < 1500:
-        print 'Mission Assessment: Target wounded, but operational.'
-    elif mean_response < 2000:
-        print 'Mission Assessment: Target severely compromised.'
-    else:
-        print 'Mission Assessment: Swarm annihilated target.'
-    
-def attack(url, n, c):
+def attack(username, key_name, instance_ids, battleplan):
     """
     Test the root url of this site.
     """
-    username, key_name, instance_ids = _read_server_list()
-
     if not instance_ids:
         print 'No bees are ready to attack.'
         return
@@ -282,33 +175,33 @@ def attack(url, n, c):
         instances.extend(reservation.instances)
 
     instance_count = len(instances)
-    requests_per_instance = int(float(n) / instance_count)
-    connections_per_instance = int(float(c) / instance_count)
+    requests_per_instance = int(float(battleplan['messages']) / instance_count)
+    connections_per_instance = int(float(battleplan['users']) / instance_count)
 
     print 'Each of %i bees will fire %s rounds, %s at a time.' % (instance_count, requests_per_instance, connections_per_instance)
+    print '%d%% of the bees will connect via SSL' % (battleplan['ssl-ratio'] * 100)
 
     params = []
 
     for i, instance in enumerate(instances):
+        plan = copy.deepcopy(battleplan)
+        plan['users'] = connections_per_instance
+        plan['messages'] = requests_per_instance
         params.append({
             'i': i,
             'instance_id': instance.id,
             'instance_name': instance.public_dns_name,
-            'url': url,
-            'concurrent_requests': connections_per_instance,
-            'num_requests': requests_per_instance,
             'username': username,
             'key_name': key_name,
+            'battleplan': plan,
         })
 
     print 'Organizing the swarm.'
 
     # Spin up processes for connecting to EC2 instances
     pool = Pool(len(params))
-    results = pool.map(_attack, params)
+    pool.map(_attack, params)
 
     print 'Offensive complete.'
-
-    _print_results(results)
 
     print 'The swarm is awaiting new orders.'
