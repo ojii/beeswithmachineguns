@@ -34,8 +34,6 @@ import boto
 import paramiko
 
 EC2_INSTANCE_TYPE = 't1.micro'
-STATE_FILENAME = os.path.expanduser('~/.bees')
-ATTACK_SCRIPT = os.path.join(os.path.dirname(__file__), 'attack.py')
 
 # Utilities
 
@@ -133,15 +131,21 @@ def _attack(params):
         print 'Bee %i is mounting his machine gun!' % params['i']
 
         sftp = client.open_sftp()
-        sftp.put(ATTACK_SCRIPT, 'attack.py')
+        sftp.put(params['battleplan']['script'], 'attack.py')
+        sftp.put(params['battleplan']['requirements'], 'requirements.txt')
         sftp.close()
 
         print 'Bee %i is firing his machine gun. Bang bang!' % params['i']
 
-        stdin, stdout, stderr = client.exec_command('python attack.py %(users)s %(ssl-ratio)s %(messages)s %(min-pause)s %(max-pause)s %(min-length)s %(max-length)s %(target-host)s %(target-port)s %(target-ssl-port)s %(target-channel)s %(password)s' % params['battleplan'])
-
-        result = stdout.read()
-        print result
+        stdin, stdout, stderr = client.exec_command('virtualenv env')
+        print stdout.read()
+        print stderr.read()
+        stdin, stdout, stderr = client.exec_command('env/bin/python `which pip` install -r requirements.txt')
+        print stdout.read()
+        print stderr.read()
+        stdin, stdout, stderr = client.exec_command('env/bin/python attack.py %(users)s %(ssl-ratio)s %(messages)s %(min-pause)s %(max-pause)s %(min-length)s %(max-length)s %(target-host)s %(target-port)s %(target-ssl-port)s %(target-channel)s %(password)s %(beenum)s' % params['battleplan'])
+        print stdout.read()
+        print stderr.read()
 
         print 'Bee %i is out of ammo.' % params['i']
 
@@ -187,6 +191,7 @@ def attack(username, key_name, instance_ids, battleplan):
         plan = copy.deepcopy(battleplan)
         plan['users'] = connections_per_instance
         plan['messages'] = requests_per_instance
+        plan['beenum'] = i
         params.append({
             'i': i,
             'instance_id': instance.id,
