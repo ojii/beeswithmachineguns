@@ -26,17 +26,15 @@ THE SOFTWARE.
 
 from multiprocessing import Pool
 import os
-import re
 import socket
-import sys
 import time
-import urllib2
 
 import boto
 import paramiko
 
 EC2_INSTANCE_TYPE = 't1.micro'
 STATE_FILENAME = os.path.expanduser('~/.bees')
+ATTACK_SCRIPT = os.path.join(os.path.dirname(__file__), 'attack.py')
 
 # Utilities
 
@@ -108,6 +106,7 @@ def up(count, group, zone, image_id, username, key_name):
     instance_ids = []
 
     for instance in reservation.instances:
+        instance.update()
         while instance.state != 'running':
             print '.'
             time.sleep(5)
@@ -184,35 +183,24 @@ def _attack(params):
             username=params['username'],
             key_filename=_get_pem_path(params['key_name']))
 
+        print 'Bee %i is mounting his machine gun!' % params['i']
+
+        sftp = client.open_sftp()
+        sftp.put(ATTACK_SCRIPT, 'attack.py')
+        sftp.close()
+
         print 'Bee %i is firing his machine gun. Bang bang!' % params['i']
 
-        stdin, stdout, stderr = client.exec_command('ab -r -n %(num_requests)s -c %(concurrent_requests)s -C "sessionid=NotARealSessionID" "%(url)s"' % params)
+        stdin, stdout, stderr = client.exec_command('python attack.py')
 
-        response = {}
-
-        ab_results = stdout.read()
-        ms_per_request_search = re.search('Time\ per\ request:\s+([0-9.]+)\ \[ms\]\ \(mean\)', ab_results)
-
-        if not ms_per_request_search:
-            print 'Bee %i lost sight of the target (connection timed out).' % params['i']
-            return None
-
-        requests_per_second_search = re.search('Requests\ per\ second:\s+([0-9.]+)\ \[#\/sec\]\ \(mean\)', ab_results)
-        fifty_percent_search = re.search('\s+50\%\s+([0-9]+)', ab_results)
-        ninety_percent_search = re.search('\s+90\%\s+([0-9]+)', ab_results)
-        complete_requests_search = re.search('Complete\ requests:\s+([0-9]+)', ab_results)
-
-        response['ms_per_request'] = float(ms_per_request_search.group(1))
-        response['requests_per_second'] = float(requests_per_second_search.group(1))
-        response['fifty_percent'] = float(fifty_percent_search.group(1))
-        response['ninety_percent'] = float(ninety_percent_search.group(1))
-        response['complete_requests'] = float(complete_requests_search.group(1))
+        result = stdout.read()
+        print result
 
         print 'Bee %i is out of ammo.' % params['i']
 
         client.close()
 
-        return response
+        return None
     except socket.error, e:
         return e
 
@@ -312,11 +300,6 @@ def attack(url, n, c):
             'username': username,
             'key_name': key_name,
         })
-
-    print 'Stinging URL so it will be cached for the attack.'
-
-    # Ping url so it will be cached for testing
-    urllib2.urlopen(url)
 
     print 'Organizing the swarm.'
 
