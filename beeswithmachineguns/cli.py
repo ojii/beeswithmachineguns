@@ -61,12 +61,12 @@ def up(config, swarmpath):
         yaml.dump(swarm, fobj)
 
 def down(swarm, swarmpath):
-    bees.down(swarm['username'], swarm['key-name'], swarm['instances'])
+    bees.down(swarm['username'], swarm['key-name'], swarm['zone'], swarm['instances'])
     os.remove(swarmpath)
 
 
 def attack(swarm, battleplan):
-    bees.attack(swarm['username'], swarm['key-name'], swarm['instances'], battleplan)
+    bees.attack(swarm['username'], swarm['key-name'], swarm['zone'], swarm['instances'], battleplan)
 
 def main():
     arguments = docopt(doc)

@@ -30,7 +30,7 @@ import os
 import socket
 import time
 
-import boto
+import boto.ec2
 import paramiko
 
 EC2_INSTANCE_TYPE = 't1.micro'
@@ -39,6 +39,17 @@ EC2_INSTANCE_TYPE = 't1.micro'
 
 def _get_pem_path(key):
     return os.path.expanduser('~/.ssh/%s.pem' % key)
+
+def _get_region(zone):
+    region_name = zone[:-1]
+    region = boto.ec2.get_region(region_name)
+    if not region:
+        valid_regions = ', '.join((r.name for r in boto.ec2.regions()))
+        print '%s does not appear to be a valid region.' % region_name
+        print 'Valid regions are: %s' % valid_regions
+        return False
+    else:
+        return region
 
 # Methods
 
@@ -54,9 +65,11 @@ def up(count, group, zone, image_id, username, key_name):
         print 'No key file found at %s' % pem_path
         return False
 
+    region = _get_region(zone)
+    if not region:
+        return False
     print 'Connecting to the hive.'
-
-    ec2_connection = boto.connect_ec2()
+    ec2_connection = region.connect()
 
     print 'Attempting to call up %i bees.' % count
 
@@ -91,10 +104,11 @@ def up(count, group, zone, image_id, username, key_name):
     return {
         'username': str(username),
         'key-name': str(key_name),
+        'zone': str(zone),
         'instances': [str(instance.id) for instance in reservation.instances],
     }
 
-def down(username, key_name, instance_ids):
+def down(username, key_name, zone, instance_ids):
     """
     Shutdown the load testing server.
     """
@@ -102,9 +116,11 @@ def down(username, key_name, instance_ids):
         print 'No bees have been mobilized.'
         return
 
+    region = _get_region(zone)
+    if not region:
+        return
     print 'Connecting to the hive.'
-
-    ec2_connection = boto.connect_ec2()
+    ec2_connection = region.connect()
 
     print 'Calling off the swarm.'
 
@@ -157,7 +173,7 @@ def _attack(params):
         import traceback; traceback.print_exc()
         return e
 
-def attack(username, key_name, instance_ids, battleplan):
+def attack(username, key_name, zone, instance_ids, battleplan):
     """
     Test the root url of this site.
     """
@@ -165,9 +181,11 @@ def attack(username, key_name, instance_ids, battleplan):
         print 'No bees are ready to attack.'
         return
 
+    region = _get_region(zone)
+    if not region:
+        return
     print 'Connecting to the hive.'
-
-    ec2_connection = boto.connect_ec2()
+    ec2_connection = region.connect()
 
     print 'Assembling bees.'
 
